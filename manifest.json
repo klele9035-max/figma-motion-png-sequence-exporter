@@ -1,0 +1,12 @@
+{
+  "name": "动画毫秒取帧导出",
+  "id": "157904202647781092",
+  "api": "1.0.0",
+  "main": "code.js",
+  "ui": "ui.html",
+  "editorType": ["figma"],
+  "documentAccess": "dynamic-page",
+  "networkAccess": {
+    "allowedDomains": ["none"]
+  }
+}

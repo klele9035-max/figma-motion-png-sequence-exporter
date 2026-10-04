@@ -1,0 +1,519 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>动画毫秒取帧导出</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      font-size: 12px;
+      --bg: var(--figma-color-bg, #fff);
+      --surface: var(--figma-color-bg-secondary, #f5f5f5);
+      --text: var(--figma-color-text, #222);
+      --muted: var(--figma-color-text-secondary, #666);
+      --border: var(--figma-color-border, #ddd);
+      --brand: var(--figma-color-bg-brand, #0d99ff);
+      --danger: var(--figma-color-text-danger, #d93025);
+    }
+    * { box-sizing: border-box; }
+    html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; background: var(--bg); color: var(--text); }
+    body { display: flex; flex-direction: column; }
+    main { flex: 1; overflow: auto; padding: 16px 16px 76px; }
+    h1 { margin: 0; font-size: 18px; line-height: 24px; }
+    .subtitle { margin: 4px 0 14px; color: var(--muted); line-height: 18px; }
+    .card { border: 1px solid var(--border); border-radius: 8px; padding: 12px; margin-bottom: 12px; }
+    .selection { background: var(--surface); line-height: 18px; }
+    .selection.error { color: var(--danger); }
+    .section-title { margin: 0 0 8px; font-weight: 600; }
+    .segmented { display: grid; grid-template-columns: 1fr 1fr; gap: 0; padding: 2px; border: 1px solid var(--border); border-radius: 7px; margin-bottom: 12px; }
+    .segmented button { border: 0; background: transparent; color: var(--text); border-radius: 5px; height: 30px; cursor: pointer; }
+    .segmented button.active { background: var(--brand); color: white; }
+    .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+    .grid.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    label.field { display: flex; flex-direction: column; gap: 5px; min-width: 0; color: var(--muted); }
+    input { width: 100%; height: 32px; border: 1px solid var(--border); border-radius: 6px; padding: 0 9px; background: var(--bg); color: var(--text); outline: none; }
+    input:focus { border-color: var(--brand); box-shadow: 0 0 0 1px var(--brand); }
+    .time-row { display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: end; }
+    button.secondary { height: 32px; padding: 0 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: var(--text); cursor: pointer; white-space: nowrap; }
+    .hint { margin-top: 8px; color: var(--muted); line-height: 17px; }
+    .check { display: flex; gap: 8px; align-items: flex-start; line-height: 17px; cursor: pointer; }
+    .check input { width: 14px; height: 14px; margin: 2px 0 0; padding: 0; }
+    .hidden { display: none !important; }
+    footer { position: fixed; left: 0; right: 0; bottom: 0; padding: 10px 16px 14px; border-top: 1px solid var(--border); background: var(--bg); }
+    .status { min-height: 18px; margin-bottom: 7px; color: var(--muted); line-height: 16px; }
+    .status.error { color: var(--danger); }
+    .progress { height: 3px; border-radius: 2px; background: var(--surface); overflow: hidden; margin-bottom: 8px; }
+    .progress > div { width: 0; height: 100%; background: var(--brand); transition: width .15s ease; }
+    button.primary { width: 100%; height: 36px; border: 0; border-radius: 7px; background: var(--brand); color: white; font-weight: 600; cursor: pointer; }
+    button:disabled { opacity: .45; cursor: default; }
+    .badge { display: inline-block; margin-left: 6px; padding: 1px 6px; border-radius: 999px; background: color-mix(in srgb, var(--brand) 14%, transparent); color: var(--brand); }
+    #resize { position: fixed; right: 0; bottom: 0; width: 18px; height: 18px; cursor: nwse-resize; z-index: 5; }
+    #resize::after { content: ""; position: absolute; right: 4px; bottom: 4px; width: 7px; height: 7px; border-right: 2px solid var(--muted); border-bottom: 2px solid var(--muted); }
+    .modal-backdrop { position: fixed; inset: 0; display: grid; place-items: center; padding: 20px; background: rgba(0,0,0,.42); z-index: 20; }
+    .modal { width: min(360px, 100%); background: var(--bg); border: 1px solid var(--border); border-radius: 10px; padding: 16px; box-shadow: 0 14px 40px rgba(0,0,0,.24); }
+    .modal h2 { margin: 0 0 8px; font-size: 15px; }
+    .modal p { margin: 0 0 14px; line-height: 18px; white-space: pre-wrap; }
+    .modal button { float: right; height: 30px; padding: 0 14px; border: 0; border-radius: 6px; background: var(--brand); color: white; cursor: pointer; }
+    video, canvas { display: none; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>动画毫秒取帧导出</h1>
+    <p class="subtitle">输入毫秒，使用 Figma 自己的 Motion 渲染结果导出 PNG。</p>
+
+    <div id="selection" class="card selection">正在读取当前选择…</div>
+
+    <div class="segmented" aria-label="导出模式">
+      <button id="mode-single" class="active" type="button">单帧</button>
+      <button id="mode-sequence" type="button">序列</button>
+    </div>
+
+    <section id="single-panel" class="card">
+      <div class="section-title">指定动画时间</div>
+      <div class="time-row">
+        <label class="field">时间（ms）
+          <input id="time" type="number" min="0" step="1" value="40">
+        </label>
+        <button id="use-playhead" class="secondary" type="button">使用当前播放头</button>
+      </div>
+      <div id="single-preview" class="hint">将导出 40.png</div>
+    </section>
+
+    <section id="sequence-panel" class="card hidden">
+      <div class="section-title">动画序列范围</div>
+      <div class="grid three">
+        <label class="field">起始（ms）
+          <input id="start" type="number" min="0" step="1" value="0">
+        </label>
+        <label class="field">间隔（ms）
+          <input id="interval" type="number" min="1" step="1" value="40">
+        </label>
+        <label class="field">截止（ms）
+          <input id="end" type="number" min="0" step="1" value="1000">
+        </label>
+      </div>
+      <div id="sequence-preview" class="hint">正在计算文件数量…</div>
+    </section>
+
+    <section class="card">
+      <div class="section-title">文件名</div>
+      <div class="grid">
+        <label class="field">前缀
+          <input id="prefix" type="text" placeholder="例如：镜头_">
+        </label>
+        <label class="field">后缀
+          <input id="suffix" type="text" placeholder="例如：_最终">
+        </label>
+      </div>
+      <div class="hint">格式：前缀 + 毫秒数 + 后缀 + .png</div>
+    </section>
+
+    <section class="card">
+      <label class="check">
+        <input id="transparent" type="checkbox">
+        <span>透明背景<span class="badge">默认关闭</span><br><span class="hint">仅移除顶层 Frame 自身的背景填充，不删除内容图层。</span></span>
+      </label>
+    </section>
+
+    <section class="card">
+      <div class="section-title">导出说明</div>
+      <div class="hint" style="margin-top:0">单帧直接保存为 PNG；序列保存为一个 ZIP。导出完成后系统会弹出“另存为”，可选择位置和文件名。优先使用 60 fps；当前 Figma 环境不支持时自动回退到 30 fps，并提取最接近输入毫秒的动画帧。</div>
+    </section>
+  </main>
+
+  <footer>
+    <div id="status" class="status">准备就绪。</div>
+    <div class="progress"><div id="progress"></div></div>
+    <button id="export" class="primary" type="button" disabled>导出当前毫秒帧</button>
+  </footer>
+
+  <div id="resize" aria-label="拖动调整窗口大小"></div>
+  <div id="error-modal" class="modal-backdrop hidden" role="dialog" aria-modal="true">
+    <div class="modal">
+      <h2>导出失败</h2>
+      <p id="error-text"></p>
+      <button id="error-close" type="button">知道了</button>
+    </div>
+  </div>
+  <video id="decoder" muted playsinline></video>
+  <canvas id="canvas"></canvas>
+
+  <script>
+    const $ = id => document.getElementById(id)
+    let mode = 'single'
+    let busy = false
+    let selectionValid = false
+    let durationMs = 0
+    let currentPlayheadMs = null
+    let timeTouched = false
+    let endTouched = false
+    let preferencesLoaded = false
+
+    function post(message) { parent.postMessage({ pluginMessage: message }, '*') }
+    function number(id) { return Number($(id).value) }
+    function text(id) { return String($(id).value || '') }
+    function cleanTime(value) {
+      const rounded = Math.round(value * 1000) / 1000
+      return Number.isInteger(rounded) ? String(rounded) : String(rounded).replace(/0+$/, '').replace(/\.$/, '')
+    }
+    function safeNamePart(value) {
+      if (/[\\/:*?"<>|]/.test(value)) throw new Error('文件名前后缀不能包含 \\ / : * ? " < > |。')
+      return value
+    }
+    function fileName(value) { return safeNamePart(text('prefix')) + cleanTime(value) + safeNamePart(text('suffix')) + '.png' }
+    function setStatus(message, kind) {
+      $('status').textContent = message
+      $('status').className = 'status' + (kind === 'error' ? ' error' : '')
+    }
+    function showError(message) {
+      $('error-text').textContent = message
+      $('error-modal').classList.remove('hidden')
+      setStatus(message, 'error')
+    }
+    function setProgress(value) { $('progress').style.width = Math.max(0, Math.min(100, value)) + '%' }
+    function setBusy(value) {
+      busy = value
+      $('export').disabled = value || !selectionValid
+      $('mode-single').disabled = value
+      $('mode-sequence').disabled = value
+    }
+
+    function buildPlan() {
+      const prefix = safeNamePart(text('prefix'))
+      const suffix = safeNamePart(text('suffix'))
+      let times = []
+      if (mode === 'single') {
+        const value = number('time')
+        if (!Number.isFinite(value) || value < 0) throw new Error('时间必须是大于或等于 0 的毫秒数。')
+        if (durationMs && value > durationMs) throw new Error('时间不能超过动画时长 ' + durationMs + ' ms。')
+        times = [value]
+      } else {
+        const start = number('start')
+        const interval = number('interval')
+        const end = number('end')
+        if (!Number.isFinite(start) || start < 0) throw new Error('起始时间必须大于或等于 0。')
+        if (!Number.isFinite(interval) || interval <= 0) throw new Error('间隔必须大于 0。')
+        if (!Number.isFinite(end) || end < start) throw new Error('截止时间必须大于或等于起始时间。')
+        if (durationMs && end > durationMs) throw new Error('截止时间不能超过动画时长 ' + durationMs + ' ms。')
+        const epsilon = Math.max(1e-7, Math.abs(interval) * 1e-9)
+        for (let value = start, index = 0; value <= end + epsilon; value = start + (++index) * interval) {
+          times.push(Math.min(value, end))
+          if (times.length > 1000) throw new Error('单次最多导出 1000 张 PNG，请增大间隔或缩短范围。')
+        }
+        if (!times.length || Math.abs(times[times.length - 1] - end) > epsilon) times.push(end)
+      }
+      const names = times.map(value => prefix + cleanTime(value) + suffix + '.png')
+      return { times, names }
+    }
+
+    function refreshPreview() {
+      try {
+        const plan = buildPlan()
+        $('single-preview').textContent = mode === 'single' ? '将导出 ' + plan.names[0] : ''
+        if (mode === 'sequence') {
+          $('sequence-preview').textContent = '将导出 ' + plan.times.length + ' 张 PNG；不能整除时会补导精确截止时间。首张 ' + plan.names[0] + '，末张 ' + plan.names[plan.names.length - 1] + '。'
+        }
+        setStatus(selectionValid ? '准备就绪。' : '请先选择有效动画 Frame 或 Group。')
+      } catch (error) {
+        setStatus(error.message || String(error), 'error')
+      }
+      savePreferences()
+    }
+
+    function setMode(next) {
+      mode = next
+      $('mode-single').classList.toggle('active', mode === 'single')
+      $('mode-sequence').classList.toggle('active', mode === 'sequence')
+      $('single-panel').classList.toggle('hidden', mode !== 'single')
+      $('sequence-panel').classList.toggle('hidden', mode !== 'sequence')
+      $('export').textContent = mode === 'single' ? '导出当前毫秒帧' : '导出 PNG 序列'
+      refreshPreview()
+    }
+
+    function preferences() {
+      return {
+        mode,
+        time: number('time'),
+        start: number('start'),
+        interval: number('interval'),
+        end: number('end'),
+        prefix: text('prefix'),
+        suffix: text('suffix'),
+        transparent: $('transparent').checked,
+      }
+    }
+    function savePreferences() {
+      if (!preferencesLoaded) return
+      post({ type: 'save-preferences', value: preferences() })
+    }
+    function applyPreferences(value) {
+      if (!value || typeof value !== 'object') return
+      if (value.mode === 'single' || value.mode === 'sequence') mode = value.mode
+      if (Number.isFinite(value.time)) { $('time').value = value.time; timeTouched = true }
+      if (Number.isFinite(value.start)) $('start').value = value.start
+      if (Number.isFinite(value.interval) && value.interval > 0) $('interval').value = value.interval
+      if (Number.isFinite(value.end)) { $('end').value = value.end; endTouched = true }
+      if (typeof value.prefix === 'string') $('prefix').value = value.prefix
+      if (typeof value.suffix === 'string') $('suffix').value = value.suffix
+      $('transparent').checked = Boolean(value.transparent)
+      setMode(mode)
+    }
+
+    function concatBytes(parts) {
+      const total = parts.reduce((sum, part) => sum + part.length, 0)
+      const output = new Uint8Array(total)
+      let offset = 0
+      for (const part of parts) { output.set(part, offset); offset += part.length }
+      return output
+    }
+    const crcTable = (() => {
+      const table = new Uint32Array(256)
+      for (let n = 0; n < 256; n++) {
+        let c = n
+        for (let k = 0; k < 8; k++) c = (c & 1) ? 0xedb88320 ^ (c >>> 1) : c >>> 1
+        table[n] = c >>> 0
+      }
+      return table
+    })()
+    function crc32(bytes) {
+      let c = 0xffffffff
+      for (let i = 0; i < bytes.length; i++) c = crcTable[(c ^ bytes[i]) & 0xff] ^ (c >>> 8)
+      return (c ^ 0xffffffff) >>> 0
+    }
+    function zipStamp(date) {
+      const year = Math.max(1980, date.getFullYear())
+      return {
+        time: (date.getHours() << 11) | (date.getMinutes() << 5) | Math.floor(date.getSeconds() / 2),
+        date: ((year - 1980) << 9) | ((date.getMonth() + 1) << 5) | date.getDate(),
+      }
+    }
+    function createZip(files) {
+      const encoder = new TextEncoder()
+      const stamp = zipStamp(new Date())
+      const localParts = []
+      const centralParts = []
+      let offset = 0
+      for (const file of files) {
+        const name = encoder.encode(file.name)
+        const data = file.bytes
+        const checksum = crc32(data)
+        const local = new Uint8Array(30 + name.length)
+        const lv = new DataView(local.buffer)
+        lv.setUint32(0, 0x04034b50, true); lv.setUint16(4, 20, true); lv.setUint16(6, 0x0800, true)
+        lv.setUint16(8, 0, true); lv.setUint16(10, stamp.time, true); lv.setUint16(12, stamp.date, true)
+        lv.setUint32(14, checksum, true); lv.setUint32(18, data.length, true); lv.setUint32(22, data.length, true)
+        lv.setUint16(26, name.length, true); lv.setUint16(28, 0, true); local.set(name, 30)
+        localParts.push(local, data)
+        const central = new Uint8Array(46 + name.length)
+        const cv = new DataView(central.buffer)
+        cv.setUint32(0, 0x02014b50, true); cv.setUint16(4, 20, true); cv.setUint16(6, 20, true)
+        cv.setUint16(8, 0x0800, true); cv.setUint16(10, 0, true); cv.setUint16(12, stamp.time, true)
+        cv.setUint16(14, stamp.date, true); cv.setUint32(16, checksum, true); cv.setUint32(20, data.length, true)
+        cv.setUint32(24, data.length, true); cv.setUint16(28, name.length, true); cv.setUint16(30, 0, true)
+        cv.setUint16(32, 0, true); cv.setUint16(34, 0, true); cv.setUint16(36, 0, true)
+        cv.setUint32(38, 0, true); cv.setUint32(42, offset, true); central.set(name, 46)
+        centralParts.push(central)
+        offset += local.length + data.length
+      }
+      const central = concatBytes(centralParts)
+      const end = new Uint8Array(22)
+      const ev = new DataView(end.buffer)
+      ev.setUint32(0, 0x06054b50, true); ev.setUint16(4, 0, true); ev.setUint16(6, 0, true)
+      ev.setUint16(8, files.length, true); ev.setUint16(10, files.length, true)
+      ev.setUint32(12, central.length, true); ev.setUint32(16, offset, true); ev.setUint16(20, 0, true)
+      return concatBytes(localParts.concat([central, end]))
+    }
+
+    function download(blob, name) {
+      const url = URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = url
+      link.download = name
+      document.body.appendChild(link)
+      link.click()
+      link.remove()
+      setTimeout(() => URL.revokeObjectURL(url), 4000)
+    }
+    function bytes(value) {
+      if (value instanceof Uint8Array) return value
+      if (value instanceof ArrayBuffer) return new Uint8Array(value)
+      if (value && value.buffer instanceof ArrayBuffer) return new Uint8Array(value.buffer)
+      return new Uint8Array(value || [])
+    }
+    function waitFor(element, event, timeout) {
+      return new Promise((resolve, reject) => {
+        const timer = setTimeout(() => { cleanup(); reject(new Error('视频解码超时。')) }, timeout || 30000)
+        const done = () => { cleanup(); resolve() }
+        const failed = () => { cleanup(); reject(new Error('Figma 动画视频无法解码。')) }
+        function cleanup() { clearTimeout(timer); element.removeEventListener(event, done); element.removeEventListener('error', failed) }
+        element.addEventListener(event, done, { once: true })
+        element.addEventListener('error', failed, { once: true })
+      })
+    }
+    function nextPaint() { return new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))) }
+    async function seek(video, seconds) {
+      if (Math.abs(video.currentTime - seconds) < 0.0001 && video.readyState >= 2) { await nextPaint(); return }
+      const ready = waitFor(video, 'seeked', 15000)
+      video.currentTime = seconds
+      await ready
+      await nextPaint()
+    }
+    function canvasBlob(canvas) {
+      return new Promise((resolve, reject) => canvas.toBlob(blob => blob ? resolve(blob) : reject(new Error('PNG 编码失败。')), 'image/png'))
+    }
+    async function decodeFrames(message) {
+      const video = $('decoder')
+      const videoBytes = bytes(message.bytes)
+      if (!videoBytes.length) throw new Error('Figma 没有返回动画视频数据。')
+      const videoUrl = URL.createObjectURL(new Blob([videoBytes], { type: message.mimeType || 'video/webm' }))
+      video.src = videoUrl
+      video.preload = 'auto'
+      video.muted = true
+      if (video.readyState < 1) await waitFor(video, 'loadedmetadata', 30000)
+      if (!(video.videoWidth > 0 && video.videoHeight > 0)) throw new Error('动画视频尺寸无效。')
+
+      const crop = message.crop
+      const scaleX = video.videoWidth / message.frameWidth
+      const scaleY = video.videoHeight / message.frameHeight
+      const sx = Math.max(0, Math.round(crop.x * scaleX))
+      const sy = Math.max(0, Math.round(crop.y * scaleY))
+      const sw = Math.min(video.videoWidth - sx, Math.max(1, Math.round(crop.width * scaleX)))
+      const sh = Math.min(video.videoHeight - sy, Math.max(1, Math.round(crop.height * scaleY)))
+      const canvas = $('canvas')
+      canvas.width = sw
+      canvas.height = sh
+      const context = canvas.getContext('2d', { alpha: true, willReadFrequently: false })
+      const files = []
+
+      for (let i = 0; i < message.times.length; i++) {
+        const requested = message.times[i] / 1000
+        const lastSafe = Math.max(0, video.duration - 1 / 120)
+        const target = Math.max(0, Math.min(requested, lastSafe))
+        setStatus('正在提取 ' + cleanTime(message.times[i]) + ' ms…')
+        setProgress(35 + ((i + 1) / message.times.length) * 55)
+        await seek(video, target)
+        context.clearRect(0, 0, sw, sh)
+        context.drawImage(video, sx, sy, sw, sh, 0, 0, sw, sh)
+        const blob = await canvasBlob(canvas)
+        files.push({ name: message.names[i], bytes: new Uint8Array(await blob.arrayBuffer()) })
+      }
+
+      URL.revokeObjectURL(videoUrl)
+      video.removeAttribute('src')
+      video.load()
+      return files
+    }
+
+    async function startExport() {
+      if (busy) return
+      try {
+        if (!selectionValid) throw new Error('请先选择一个有效的动画 Frame 或 Group。')
+        const plan = buildPlan()
+        setBusy(true)
+        setProgress(5)
+        setStatus('正在请求 Figma 渲染动画…')
+        savePreferences()
+        post({
+          type: 'render-animation',
+          times: plan.times,
+          names: plan.names,
+          transparentBackground: $('transparent').checked,
+        })
+      } catch (error) {
+        setBusy(false)
+        showError(error.message || String(error))
+      }
+    }
+
+    window.onmessage = async event => {
+      const message = event.data && event.data.pluginMessage
+      if (!message) return
+      if (message.type === 'selection-info') {
+        selectionValid = Boolean(message.valid)
+        durationMs = Number(message.durationMs) || 0
+        currentPlayheadMs = Number.isFinite(message.playheadMs) ? message.playheadMs : null
+        $('selection').classList.toggle('error', !selectionValid)
+        $('selection').textContent = selectionValid
+          ? message.nodeName + ' · ' + message.nodeType + ' · 动画 ' + durationMs + ' ms' + (currentPlayheadMs !== null ? ' · 当前播放头 ' + currentPlayheadMs + ' ms' : '')
+          : message.message
+        if (!timeTouched && currentPlayheadMs !== null) $('time').value = currentPlayheadMs
+        if (!endTouched && durationMs > 0) $('end').value = durationMs
+        $('export').disabled = busy || !selectionValid
+        refreshPreview()
+        return
+      }
+      if (message.type === 'preferences') {
+        applyPreferences(message.value)
+        preferencesLoaded = true
+        savePreferences()
+        return
+      }
+      if (message.type === 'render-progress') {
+        setProgress(20)
+        setStatus(message.message || 'Figma 正在渲染…')
+        return
+      }
+      if (message.type === 'rendered-video') {
+        try {
+          setProgress(35)
+          setStatus('Figma 已以 ' + message.fps + ' fps 渲染完成，正在按毫秒取帧…')
+          const files = await decodeFrames(message)
+          setProgress(94)
+          if (files.length === 1) {
+            download(new Blob([files[0].bytes], { type: 'image/png' }), files[0].name)
+            setStatus('已生成 ' + files[0].name + '，请选择保存位置。')
+          } else {
+            const zip = createZip(files)
+            download(new Blob([zip], { type: 'application/zip' }), '动画毫秒取帧导出.zip')
+            setStatus('已生成 ' + files.length + ' 张 PNG 的 ZIP，请选择保存位置。')
+          }
+          setProgress(100)
+        } catch (error) {
+          showError(error.message || String(error))
+        } finally {
+          setBusy(false)
+        }
+        return
+      }
+      if (message.type === 'plugin-error') {
+        setBusy(false)
+        showError(message.message || '未知插件错误。')
+      }
+    }
+
+    $('mode-single').onclick = () => setMode('single')
+    $('mode-sequence').onclick = () => setMode('sequence')
+    $('use-playhead').onclick = () => {
+      if (currentPlayheadMs === null) return showError('当前没有可读取的 Motion 播放头。请先打开动画时间轴。')
+      $('time').value = currentPlayheadMs
+      timeTouched = true
+      refreshPreview()
+    }
+    $('export').onclick = startExport
+    $('error-close').onclick = () => $('error-modal').classList.add('hidden')
+    for (const id of ['time', 'start', 'interval', 'end', 'prefix', 'suffix', 'transparent']) {
+      $(id).addEventListener('input', () => {
+        if (id === 'time') timeTouched = true
+        if (id === 'end') endTouched = true
+        refreshPreview()
+      })
+      $(id).addEventListener('change', refreshPreview)
+    }
+
+    let resizing = false
+    $('resize').addEventListener('pointerdown', event => { resizing = true; $('resize').setPointerCapture(event.pointerId) })
+    $('resize').addEventListener('pointermove', event => {
+      if (!resizing) return
+      post({ type: 'resize', width: event.clientX + 8, height: event.clientY + 8 })
+    })
+    $('resize').addEventListener('pointerup', () => { resizing = false })
+
+    setMode('single')
+    post({ type: 'request-preferences' })
+    post({ type: 'inspect-selection' })
+  </script>
+</body>
+</html>
