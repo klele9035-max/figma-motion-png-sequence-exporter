@@ -16,6 +16,11 @@ function finiteNumber(value, label) {
   return number
 }
 
+function exportScale(value) {
+  const scale = finiteNumber(value, '导出清晰度')
+  return [1, 2, 3, 4].includes(scale) ? scale : 1
+}
+
 function topLevelFrameFor(node) {
   if (!node) return null
   if (node.type === 'FRAME' && node.parent && node.parent.type === 'PAGE') return node
@@ -140,6 +145,7 @@ async function renderAnimation(message) {
   })
 
   const crop = cropFor(node, frame)
+  const scale = exportScale(message.scale)
   let exportFrame = frame
   let temporaryFrame = null
   try {
@@ -153,12 +159,17 @@ async function renderAnimation(message) {
     }
 
     post({ type: 'render-progress', phase: 'rendering', message: '正在由 Figma 渲染完整动画…' })
-    const attempts = [
-      { format: 'WEBM', mimeType: 'video/webm', fps: 60 },
-      { format: 'MP4', mimeType: 'video/mp4', fps: 60 },
-      { format: 'WEBM', mimeType: 'video/webm', fps: 30 },
-      { format: 'MP4', mimeType: 'video/mp4', fps: 30 },
-    ]
+    const attempts = message.transparentBackground
+      ? [
+          { format: 'WEBM', mimeType: 'video/webm', fps: 60 },
+          { format: 'WEBM', mimeType: 'video/webm', fps: 30 },
+        ]
+      : [
+          { format: 'WEBM', mimeType: 'video/webm', fps: 60 },
+          { format: 'MP4', mimeType: 'video/mp4', fps: 60 },
+          { format: 'WEBM', mimeType: 'video/webm', fps: 30 },
+          { format: 'MP4', mimeType: 'video/mp4', fps: 30 },
+        ]
     let rendered = null
     const errors = []
     for (const attempt of attempts) {
@@ -167,6 +178,7 @@ async function renderAnimation(message) {
           format: attempt.format,
           fps: attempt.fps,
           quality: 'HIGH',
+          constraint: { type: 'SCALE', value: scale },
         })
         rendered = {
           bytes,
@@ -196,9 +208,46 @@ async function renderAnimation(message) {
       names: message.names,
       transparentBackground: Boolean(message.transparentBackground),
       loopBeyondDuration: Boolean(message.loopBeyondDuration),
+      scale,
     })
   } finally {
     if (temporaryFrame && !temporaryFrame.removed) temporaryFrame.remove()
+  }
+}
+
+async function exportStaticPng(message) {
+  const selection = figma.currentPage.selection
+  if (selection.length !== 1) throw new Error('请只选择一个 Frame 或 Group。')
+  const node = selection[0]
+  if (node.type !== 'FRAME' && node.type !== 'GROUP') throw new Error('请选择 Frame 或 Group。')
+
+  const scale = exportScale(message.scale)
+  let exportNode = node
+  let temporaryNode = null
+  try {
+    if (message.transparentBackground) {
+      temporaryNode = node.clone()
+      temporaryNode.name = '__动画毫秒取帧_Static透明检查__'
+      if (temporaryNode.type === 'FRAME') {
+        try { temporaryNode.fills = [] } catch (_) {}
+      }
+      exportNode = temporaryNode
+    }
+    post({ type: 'render-progress', phase: 'static', message: '正在以 Static PNG 检查透明背景…' })
+    const png = await exportNode.exportAsync({
+      format: 'PNG',
+      constraint: { type: 'SCALE', value: scale },
+    })
+    post({
+      type: 'static-png',
+      bytes: png,
+      name: String(message.name || 'static.png'),
+      scale,
+      playheadMs: playheadMs(),
+      transparentBackground: Boolean(message.transparentBackground),
+    })
+  } finally {
+    if (temporaryNode && !temporaryNode.removed) temporaryNode.remove()
   }
 }
 
@@ -211,6 +260,10 @@ figma.ui.onmessage = async function (message) {
     }
     if (message.type === 'render-animation') {
       await renderAnimation(message)
+      return
+    }
+    if (message.type === 'export-static') {
+      await exportStaticPng(message)
       return
     }
     if (message.type === 'request-preferences') {
