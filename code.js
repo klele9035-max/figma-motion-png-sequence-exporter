@@ -31,8 +31,12 @@ function topLevelFrameFor(node) {
 function timelineDurationMs(frame) {
   try {
     const timelines = frame && frame.timelines
-    if (timelines && timelines.length && Number.isFinite(timelines[0].duration)) {
-      return Math.max(0, Math.round(timelines[0].duration * 1000))
+    if (timelines && timelines.length) {
+      return timelines.reduce(function (longest, timeline) {
+        return Number.isFinite(timeline.duration)
+          ? Math.max(longest, Math.round(timeline.duration * 1000))
+          : longest
+      }, 0)
     }
   } catch (_) {}
   return 0
@@ -128,7 +132,10 @@ async function renderAnimation(message) {
   if (message.times.length > 1000) throw new Error('单次最多导出 1000 张 PNG。')
   const times = message.times.map(function (value) {
     const time = finiteNumber(value, '时间')
-    if (time < 0 || time > durationMs) throw new Error('时间必须在 0–' + durationMs + ' ms 之间。')
+    if (time < 0) throw new Error('时间必须大于或等于 0 ms。')
+    if (time > durationMs && !message.loopBeyondDuration) {
+      throw new Error('时间不能超过动画时长 ' + durationMs + ' ms；可开启循环播放。')
+    }
     return time
   })
 
@@ -188,6 +195,7 @@ async function renderAnimation(message) {
       times,
       names: message.names,
       transparentBackground: Boolean(message.transparentBackground),
+      loopBeyondDuration: Boolean(message.loopBeyondDuration),
     })
   } finally {
     if (temporaryFrame && !temporaryFrame.removed) temporaryFrame.remove()

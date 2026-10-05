@@ -92,10 +92,17 @@
           <input id="interval" type="number" min="1" step="1" value="40">
         </label>
         <label class="field">截止（ms）
-          <input id="end" type="number" min="0" step="1" value="1000">
+          <input id="end" type="number" min="0" step="1" value="10000">
         </label>
       </div>
       <div id="sequence-preview" class="hint">正在计算文件数量…</div>
+    </section>
+
+    <section class="card">
+      <label class="check">
+        <input id="loop" type="checkbox" checked>
+        <span>超过原动画时长时循环播放<span class="badge">默认开启</span><br><span class="hint">例如原动画为 2000 ms，导出到 10000 ms 时会循环 5 次；不会修改原始 Figma 动画。</span></span>
+      </label>
     </section>
 
     <section class="card">
@@ -188,7 +195,7 @@
       if (mode === 'single') {
         const value = number('time')
         if (!Number.isFinite(value) || value < 0) throw new Error('时间必须是大于或等于 0 的毫秒数。')
-        if (durationMs && value > durationMs) throw new Error('时间不能超过动画时长 ' + durationMs + ' ms。')
+        if (durationMs && value > durationMs && !$('loop').checked) throw new Error('时间不能超过动画时长 ' + durationMs + ' ms；可开启循环播放。')
         times = [value]
       } else {
         const start = number('start')
@@ -197,7 +204,7 @@
         if (!Number.isFinite(start) || start < 0) throw new Error('起始时间必须大于或等于 0。')
         if (!Number.isFinite(interval) || interval <= 0) throw new Error('间隔必须大于 0。')
         if (!Number.isFinite(end) || end < start) throw new Error('截止时间必须大于或等于起始时间。')
-        if (durationMs && end > durationMs) throw new Error('截止时间不能超过动画时长 ' + durationMs + ' ms。')
+        if (durationMs && end > durationMs && !$('loop').checked) throw new Error('截止时间不能超过动画时长 ' + durationMs + ' ms；可开启循环播放。')
         const epsilon = Math.max(1e-7, Math.abs(interval) * 1e-9)
         for (let value = start, index = 0; value <= end + epsilon; value = start + (++index) * interval) {
           times.push(Math.min(value, end))
@@ -214,7 +221,8 @@
         const plan = buildPlan()
         $('single-preview').textContent = mode === 'single' ? '将导出 ' + plan.names[0] : ''
         if (mode === 'sequence') {
-          $('sequence-preview').textContent = '将导出 ' + plan.times.length + ' 张 PNG；不能整除时会补导精确截止时间。首张 ' + plan.names[0] + '，末张 ' + plan.names[plan.names.length - 1] + '。'
+          const loopHint = durationMs && number('end') > durationMs && $('loop').checked ? '；超过 ' + durationMs + ' ms 的部分循环取帧' : ''
+          $('sequence-preview').textContent = '将导出 ' + plan.times.length + ' 张 PNG' + loopHint + '；不能整除时会补导精确截止时间。首张 ' + plan.names[0] + '，末张 ' + plan.names[plan.names.length - 1] + '。'
         }
         setStatus(selectionValid ? '准备就绪。' : '请先选择有效动画 Frame 或 Group。')
       } catch (error) {
@@ -235,6 +243,7 @@
 
     function preferences() {
       return {
+        schemaVersion: 2,
         mode,
         time: number('time'),
         start: number('start'),
@@ -243,6 +252,7 @@
         prefix: text('prefix'),
         suffix: text('suffix'),
         transparent: $('transparent').checked,
+        loop: $('loop').checked,
       }
     }
     function savePreferences() {
@@ -251,14 +261,19 @@
     }
     function applyPreferences(value) {
       if (!value || typeof value !== 'object') return
+      const legacyPreferences = value.schemaVersion !== 2
       if (value.mode === 'single' || value.mode === 'sequence') mode = value.mode
       if (Number.isFinite(value.time)) { $('time').value = value.time; timeTouched = true }
       if (Number.isFinite(value.start)) $('start').value = value.start
       if (Number.isFinite(value.interval) && value.interval > 0) $('interval').value = value.interval
-      if (Number.isFinite(value.end)) { $('end').value = value.end; endTouched = true }
+      if (Number.isFinite(value.end)) {
+        $('end').value = legacyPreferences ? Math.max(value.end, 10000) : value.end
+        endTouched = true
+      }
       if (typeof value.prefix === 'string') $('prefix').value = value.prefix
       if (typeof value.suffix === 'string') $('suffix').value = value.suffix
       $('transparent').checked = Boolean(value.transparent)
+      $('loop').checked = value.loop !== false
       setMode(mode)
     }
 
@@ -389,7 +404,12 @@
       const files = []
 
       for (let i = 0; i < message.times.length; i++) {
-        const requested = message.times[i] / 1000
+        const requestedMs = message.times[i]
+        const sourceDurationMs = Number(message.durationMs) || Math.round(video.duration * 1000)
+        const sampledMs = message.loopBeyondDuration && sourceDurationMs > 0 && requestedMs > sourceDurationMs
+          ? requestedMs % sourceDurationMs
+          : requestedMs
+        const requested = sampledMs / 1000
         const lastSafe = Math.max(0, video.duration - 1 / 120)
         const target = Math.max(0, Math.min(requested, lastSafe))
         setStatus('正在提取 ' + cleanTime(message.times[i]) + ' ms…')
@@ -421,6 +441,7 @@
           times: plan.times,
           names: plan.names,
           transparentBackground: $('transparent').checked,
+          loopBeyondDuration: $('loop').checked,
         })
       } catch (error) {
         setBusy(false)
@@ -440,7 +461,7 @@
           ? message.nodeName + ' · ' + message.nodeType + ' · 动画 ' + durationMs + ' ms' + (currentPlayheadMs !== null ? ' · 当前播放头 ' + currentPlayheadMs + ' ms' : '')
           : message.message
         if (!timeTouched && currentPlayheadMs !== null) $('time').value = currentPlayheadMs
-        if (!endTouched && durationMs > 0) $('end').value = durationMs
+        if (!endTouched && durationMs > 0) $('end').value = Math.max(durationMs, 10000)
         $('export').disabled = busy || !selectionValid
         refreshPreview()
         return
@@ -494,7 +515,7 @@
     }
     $('export').onclick = startExport
     $('error-close').onclick = () => $('error-modal').classList.add('hidden')
-    for (const id of ['time', 'start', 'interval', 'end', 'prefix', 'suffix', 'transparent']) {
+    for (const id of ['time', 'start', 'interval', 'end', 'prefix', 'suffix', 'transparent', 'loop']) {
       $(id).addEventListener('input', () => {
         if (id === 'time') timeTouched = true
         if (id === 'end') endTouched = true
