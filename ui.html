@@ -80,7 +80,7 @@
         </label>
         <button id="use-playhead" class="secondary" type="button">使用当前播放头</button>
       </div>
-      <div id="single-preview" class="hint">将导出 40.png</div>
+      <div id="single-preview" class="hint">将导出 00000.png</div>
     </section>
 
     <section id="sequence-panel" class="card hidden">
@@ -108,6 +108,12 @@
 
     <section class="card">
       <div class="section-title">文件名</div>
+      <label class="field">命名方式
+        <select id="name-mode">
+          <option value="sequence" selected>连续编号（从 00000 开始，默认）</option>
+          <option value="timestamp">毫秒时间</option>
+        </select>
+      </label>
       <div class="grid">
         <label class="field">前缀
           <input id="prefix" type="text" placeholder="例如：镜头_">
@@ -116,7 +122,7 @@
           <input id="suffix" type="text" placeholder="例如：_最终">
         </label>
       </div>
-      <div class="hint">格式：前缀 + 毫秒数 + 后缀 + .png</div>
+      <div id="name-format-hint" class="hint">格式：前缀 + 五位连续编号 + 后缀 + .png；从 00000 开始，适合 AE。</div>
     </section>
 
     <section class="card">
@@ -186,7 +192,15 @@
       if (/[\\/:*?"<>|]/.test(value)) throw new Error('文件名前后缀不能包含 \\ / : * ? " < > |。')
       return value
     }
-    function fileName(value) { return safeNamePart(text('prefix')) + cleanTime(value) + safeNamePart(text('suffix')) + '.png' }
+    function namingMode() { return $('name-mode').value === 'timestamp' ? 'timestamp' : 'sequence' }
+    function sequenceNumber(index) { return String(index).padStart(5, '0') }
+    function plannedFileName(value, index) {
+      const token = namingMode() === 'timestamp' ? cleanTime(value) : sequenceNumber(index)
+      return safeNamePart(text('prefix')) + token + safeNamePart(text('suffix')) + '.png'
+    }
+    function staticFileName(value) {
+      return safeNamePart(text('prefix')) + 'static_' + cleanTime(value) + 'ms' + safeNamePart(text('suffix')) + '.png'
+    }
     function setStatus(message, kind) {
       $('status').textContent = message
       $('status').className = 'status' + (kind === 'error' ? ' error' : '')
@@ -230,13 +244,16 @@
         }
         if (!times.length || Math.abs(times[times.length - 1] - end) > epsilon) times.push(end)
       }
-      const names = times.map(value => prefix + cleanTime(value) + suffix + '.png')
+      const names = times.map((value, index) => plannedFileName(value, index))
       return { times, names }
     }
 
     function refreshPreview() {
       try {
         const plan = buildPlan()
+        $('name-format-hint').textContent = namingMode() === 'timestamp'
+          ? '格式：前缀 + 毫秒时间 + 后缀 + .png。'
+          : '格式：前缀 + 五位连续编号 + 后缀 + .png；从 00000 开始，适合 AE。'
         $('single-preview').textContent = mode === 'single' ? '将导出 ' + plan.names[0] : ''
         if (mode === 'sequence') {
           const loopHint = durationMs && number('end') > durationMs && $('loop').checked ? '；超过 ' + durationMs + ' ms 的部分循环取帧' : ''
@@ -261,8 +278,9 @@
 
     function preferences() {
       return {
-        schemaVersion: 3,
+        schemaVersion: 4,
         mode,
+        nameMode: namingMode(),
         time: number('time'),
         start: number('start'),
         interval: number('interval'),
@@ -282,6 +300,7 @@
       if (!value || typeof value !== 'object') return
       const legacyPreferences = value.schemaVersion < 2
       if (value.mode === 'single' || value.mode === 'sequence') mode = value.mode
+      if (value.nameMode === 'sequence' || value.nameMode === 'timestamp') $('name-mode').value = value.nameMode
       if (Number.isFinite(value.time)) { $('time').value = value.time; timeTouched = true }
       if (Number.isFinite(value.start)) $('start').value = value.start
       if (Number.isFinite(value.interval) && value.interval > 0) $('interval').value = value.interval
@@ -510,7 +529,7 @@
         savePreferences()
         post({
           type: 'export-static',
-          name: fileName(timestamp),
+          name: staticFileName(timestamp),
           transparentBackground: $('transparent').checked,
           scale: number('scale'),
         })
@@ -622,7 +641,7 @@
     $('export').onclick = startExport
     $('export-static').onclick = startStaticExport
     $('error-close').onclick = () => $('error-modal').classList.add('hidden')
-    for (const id of ['time', 'start', 'interval', 'end', 'prefix', 'suffix', 'transparent', 'loop', 'scale']) {
+    for (const id of ['time', 'start', 'interval', 'end', 'prefix', 'suffix', 'name-mode', 'transparent', 'loop', 'scale']) {
       $(id).addEventListener('input', () => {
         if (id === 'time') timeTouched = true
         if (id === 'end') endTouched = true
